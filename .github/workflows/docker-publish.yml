@@ -33,3 +33,6 @@ jobs:
           # Define both architectures here
           platforms: linux/amd64,linux/arm64
           tags: ${{ secrets.DOCKER_USERNAME }}/nfo-translator:latest
+          # ADD THESE LINES TO SAVE TIME:
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
