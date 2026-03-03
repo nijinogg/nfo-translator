@@ -1,0 +1,6 @@
+watchdog
+opencc-python-reimplemented
+sqlalchemy
+psycopg2-binary
+fastapi
+uvicorn

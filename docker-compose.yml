@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: nfo_monitor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - "8080:8080" # Access at http://localhost:8080
+    volumes:
+      - /your/nfo/folder:/data
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/nfo_monitor
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
