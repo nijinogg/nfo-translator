@@ -5,6 +5,7 @@ import threading
 import json
 import io
 import opencc
+import xml.etree.ElementTree as ET
 from fastapi import FastAPI, Request, BackgroundTasks, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from watchdog.observers import Observer
@@ -12,15 +13,19 @@ from watchdog.events import FileSystemEventHandler
 from sqlalchemy import create_engine, Column, String, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
 
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 WATCH_PATH = "/data"
-STARTUP_DELAY = int(os.getenv("STARTUP_DELAY", "0"))
+VERSION = "1.1.0"
 
-# Global flag to track if scanning logic is running
+try:
+    STARTUP_DELAY = int(os.getenv("STARTUP_DELAY", "0"))
+except (ValueError, TypeError):
+    STARTUP_DELAY = 0
+
 SCANNING_ACTIVE = False
+APP_BOOT_TIME = time.time()
 
 # --- DATABASE SETUP ---
 engine = None
@@ -28,14 +33,9 @@ for i in range(15):
     try:
         engine = create_engine(DATABASE_URL)
         engine.connect()
-        print("✅ Connected to PostgreSQL.")
         break
-    except Exception as e:
-        print(f"⏳ Waiting for database ({i+1}/15)...")
+    except Exception:
         time.sleep(5)
-
-if not engine:
-    raise Exception("❌ Could not connect to database.")
 
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
@@ -47,189 +47,160 @@ class FileRecord(Base):
     last_processed = Column(DateTime, default=func.now(), onupdate=func.now())
 
 Base.metadata.create_all(bind=engine)
-
-# Official OpenCC initialization (Simplified to Traditional)
 converter = opencc.OpenCC('s2t.json')
 app = FastAPI()
 
-# --- CORE LOGIC ---
+# --- TARGETED TRANSLATION LOGIC ---
+TARGET_TAGS = ['outline', 'title', 'plot', 'tag', 'genre', 'series']
+
 def process_nfo(file_path):
     if not file_path.lower().endswith(".nfo"):
         return
 
     db = SessionLocal()
     try:
+        # 1. Check Hash to avoid re-processing
         with open(file_path, "rb") as f:
-            current_hash = hashlib.md5(f.read()).hexdigest()
+            curr_hash = hashlib.md5(f.read()).hexdigest()
         
-        record = db.query(FileRecord).filter(FileRecord.path == file_path).first()
-        if record and record.hash == current_hash:
+        rec = db.query(FileRecord).filter(FileRecord.path == file_path).first()
+        if rec and rec.hash == curr_hash:
             return 
 
-        print(f"📝 Translating: {file_path}")
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
+        # 2. Parse XML
+        parser = ET.XMLParser(encoding="utf-8")
+        tree = ET.parse(file_path, parser=parser)
+        root = tree.getroot()
 
-        traditional_content = converter.convert(content)
+        modified = False
+        # 3. Translate only specific tags
+        for tag_name in TARGET_TAGS:
+            for element in root.findall(f".//{tag_name}"):
+                if element.text:
+                    translated = converter.convert(element.text)
+                    if translated != element.text:
+                        element.text = translated
+                        modified = True
 
-        with open(file_path, "w", encoding="utf-8", newline='\n') as f:
-            f.write(traditional_content)
+        if modified:
+            # Save back to file
+            tree.write(file_path, encoding="utf-8", xml_declaration=True)
+            print(f"✅ Translated tags in: {file_path}")
 
+        # 4. Update Database
         with open(file_path, "rb") as f:
-            new_hash = hashlib.md5(f.read()).hexdigest()
-
-        if record:
-            record.hash = new_hash
-        else:
-            db.add(FileRecord(path=file_path, hash=new_hash))
+            new_h = hashlib.md5(f.read()).hexdigest()
         
+        if rec: rec.hash = new_h
+        else: db.add(FileRecord(path=file_path, hash=new_h))
         db.commit()
+
     except Exception as e:
-        print(f"❌ Error on {file_path}: {e}")
+        print(f"❌ XML Error in {file_path}: {e}")
     finally:
         db.close()
 
+# --- SCANNING & WATCHER ---
 def run_full_scan():
-    print("🚀 Starting full recursive scan...")
     for root, _, files in os.walk(WATCH_PATH):
         for file in files:
             process_nfo(os.path.join(root, file))
-    print("🏁 Full scan complete.")
 
-# --- WATCHER ---
 class SubfolderHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if not event.is_directory: process_nfo(event.src_path)
     def on_created(self, event):
         if not event.is_directory: process_nfo(event.src_path)
 
-def start_watcher():
-    observer = Observer()
-    observer.schedule(SubfolderHandler(), WATCH_PATH, recursive=True)
-    observer.start()
-    try:
-        while True: time.sleep(1)
-    except:
-        observer.stop()
-
-# --- STARTUP HANDLER ---
 def boot_sequence():
     global SCANNING_ACTIVE
     if STARTUP_DELAY > 0:
-        print(f"🕒 Startup delay: {STARTUP_DELAY}s. Use this time to IMPORT backup.")
         time.sleep(STARTUP_DELAY)
-    
     SCANNING_ACTIVE = True
-    threading.Thread(target=start_watcher, daemon=True).start()
-    threading.Thread(target=run_full_scan, daemon=True).start()
+    obs = Observer()
+    obs.schedule(SubfolderHandler(), WATCH_PATH, recursive=True)
+    obs.start()
+    run_full_scan()
 
 threading.Thread(target=boot_sequence, daemon=True).start()
 
-# --- WEB UI ---
+# --- WEB UI (NO-JS AUTO REFRESH) ---
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     db = SessionLocal()
-    # Updated to show only the latest 20 rows
     records = db.query(FileRecord).order_by(FileRecord.last_processed.desc()).limit(20).all()
     total = db.query(FileRecord).count()
     db.close()
     
-    current_status = "Active" if SCANNING_ACTIVE else "Waiting (Delay Mode)"
-    status_color = "#28a745" if SCANNING_ACTIVE else "#ffc107"
-    refresh_tag = '<meta http-equiv="refresh" content="5">' if not SCANNING_ACTIVE else ""
-    
-    html = f"""
+    elapsed = time.time() - APP_BOOT_TIME
+    remaining = int(max(0, STARTUP_DELAY - elapsed))
+    is_active = SCANNING_ACTIVE or remaining <= 0
+    status_text = "Active" if is_active else f"Waiting ({remaining}s)"
+    status_color = "#28a745" if is_active else "#ffc107"
+    refresh = '<meta http-equiv="refresh" content="3">' if not is_active else ""
+
+    return f"""
     <html>
         <head>
-            {refresh_tag}
-            <title>NFO Pro Translator</title>
+            {refresh}
+            <title>NFO Pro v{VERSION}</title>
             <style>
-                body {{ font-family: -apple-system, sans-serif; padding: 30px; background: #f4f7f9; color: #333; }}
-                .card {{ max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }}
-                .status-badge {{ 
-                    padding: 4px 12px; border-radius: 20px; font-size: 0.85em; 
-                    background: {status_color}; color: white; font-weight: bold;
-                }}
-                .nav {{ 
-                    display: flex; gap: 15px; margin: 25px 0; background: #f8f9fa; 
-                    padding: 15px; border-radius: 8px; align-items: center; 
-                }}
-                .btn {{ 
-                    height: 38px; display: inline-flex; align-items: center; justify-content: center;
-                    padding: 0 18px; border-radius: 6px; border: none; cursor: pointer; 
-                    color: white; text-decoration: none; font-weight: 500; font-size: 13px; 
-                }}
-                .btn-scan {{ background: #28a745; }} 
-                .btn-export {{ background: #17a2b8; }} 
-                .btn-import {{ background: #6c757d; }}
-                table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
-                th, td {{ padding: 12px; border-bottom: 1px solid #eee; text-align: left; font-size: 13px; }}
-                th {{ background: #f1f3f5; color: #495057; text-transform: uppercase; font-size: 11px; }}
-                .file-path {{ color: #007bff; word-break: break-all; }}
+                body {{ font-family: sans-serif; padding: 20px; background: #f4f7f9; }}
+                .card {{ max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                .status-badge {{ padding: 5px 12px; border-radius: 20px; background: {status_color}; color: white; font-weight: bold; }}
+                .nav {{ display: flex; gap: 10px; margin: 20px 0; background: #eee; padding: 15px; border-radius: 8px; align-items: center; }}
+                .btn {{ height: 36px; display: inline-flex; align-items: center; padding: 0 15px; border-radius: 6px; border: none; cursor: pointer; color: white; text-decoration: none; font-size: 13px; }}
+                .btn-scan {{ background: #28a745; }} .btn-export {{ background: #17a2b8; }} .btn-import {{ background: #6c757d; }}
+                table {{ width: 100%; border-collapse: collapse; }}
+                th, td {{ padding: 10px; border-bottom: 1px solid #ddd; text-align: left; font-size: 13px; }}
             </style>
         </head>
         <body>
             <div class="card">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <h1>NFO Monitor</h1>
-                    <span class="status-badge">{current_status}</span>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h1>NFO Monitor <small style="font-size:0.4em; color:#999;">v{VERSION}</small></h1>
+                    <span class="status-badge">{status_text}</span>
                 </div>
-                <p>Showing latest 20 / Total: <strong>{total}</strong></p>
-
+                <p>Latest 20 / Total: {total} | Targets: <code>{', '.join(TARGET_TAGS)}</code></p>
                 <div class="nav">
-                    <form action="/rescan" method="post" style="margin:0;"><button class="btn btn-scan" type="submit">🔄 Rescan All</button></form>
-                    <a href="/export" class="btn btn-export">📤 Export Backup</a>
-                    
-                    <div style="margin-left:auto; display:flex; align-items:center; gap:10px; border-left:1px solid #ddd; padding-left:15px;">
-                        <form action="/import" method="post" enctype="multipart/form-data" style="margin:0; display:flex; align-items:center; gap:10px;">
-                            <input type="file" name="file" accept=".json" required style="font-size:12px;">
-                            <button type="submit" class="btn btn-import">📥 Import JSON</button>
+                    <form action="/rescan" method="post" style="margin:0;"><button class="btn btn-scan">🔄 Rescan</button></form>
+                    <a href="/export" class="btn btn-export">📤 Export</a>
+                    <div style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+                        <form action="/import" method="post" enctype="multipart/form-data" style="margin:0; display:flex; gap:5px;">
+                            <input type="file" name="file" accept=".json" required>
+                            <button type="submit" class="btn btn-import">📥 Import</button>
                         </form>
                     </div>
                 </div>
-
                 <table>
-                    <thead>
-                        <tr><th>Path</th><th>Processed (Local Time)</th></tr>
-                    </thead>
+                    <thead><tr><th>Path</th><th>Processed</th></tr></thead>
                     <tbody>
-                        {"".join([f"<tr><td class='file-path'>{r.path}</td><td>{r.last_processed.strftime('%Y-%m-%d %H:%M:%S')}</td></tr>" for r in records])}
+                        {"".join([f"<tr><td>{r.path}</td><td>{r.last_processed.strftime('%H:%M:%S')}</td></tr>" for r in records])}
                     </tbody>
                 </table>
             </div>
         </body>
     </html>
     """
-    return html
 
-@app.post("/rescan")
-async def trigger_rescan(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_full_scan)
-    return RedirectResponse(url="/", status_code=303)
-
+# (Export/Import/Rescan routes remain the same as previous version)
 @app.get("/export")
 async def export_db():
-    db = SessionLocal()
-    records = db.query(FileRecord).all()
-    db.close()
-    data = [{"path": r.path, "hash": r.hash, "last_processed": r.last_processed.isoformat()} for r in records]
-    return StreamingResponse(
-        io.BytesIO(json.dumps(data, indent=2).encode()), 
-        media_type="application/json", 
-        headers={"Content-Disposition": "attachment; filename=nfo_backup.json"}
-    )
+    db = SessionLocal(); recs = db.query(FileRecord).all(); db.close()
+    data = [{"path": r.path, "hash": r.hash, "last_processed": r.last_processed.isoformat()} for r in recs]
+    return StreamingResponse(io.BytesIO(json.dumps(data).encode()), media_type="application/json", headers={"Content-Disposition": "attachment; filename=backup.json"})
 
 @app.post("/import")
 async def import_db(file: UploadFile = File(...)):
-    contents = await file.read()
-    data = json.loads(contents)
-    db = SessionLocal()
-    try:
-        for item in data:
-            record = db.query(FileRecord).filter(FileRecord.path == item["path"]).first()
-            if record: record.hash = item["hash"]
-            else: db.add(FileRecord(path=item["path"], hash=item["hash"]))
-        db.commit()
-    finally:
-        db.close()
+    contents = await file.read(); data = json.loads(contents); db = SessionLocal()
+    for item in data:
+        rec = db.query(FileRecord).filter(FileRecord.path == item["path"]).first()
+        if rec: rec.hash = item["hash"]
+        else: db.add(FileRecord(path=item["path"], hash=item["hash"]))
+    db.commit(); db.close()
+    return RedirectResponse(url="/", status_code=303)
+
+@app.post("/rescan")
+async def rescan(bg: BackgroundTasks):
+    bg.add_task(run_full_scan)
     return RedirectResponse(url="/", status_code=303)

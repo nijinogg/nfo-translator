@@ -1,19 +1,12 @@
 services:
   app:
-    build: .
-#    env_file:
-#      - .env
+    image: starducktea/nfo-translator:latest
     ports:
-      - "8080:8080" # Access at http://localhost:8080
+      - "8099:8080"
     volumes:
-      - /share/Container/strm-data/mdcng-strm:/data
+      - ./data:/data
     environment:
       - PUID=1000
       - PGID=100
       - STARTUP_DELAY=360
       - DATABASE_URL=postgresql://nfo_monitor:nfo_monitor@db:5432/nfo_monitor
-#    depends_on:
-#      - db
-
-volumes:
-  pgdata:
