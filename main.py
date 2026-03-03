@@ -19,6 +19,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 WATCH_PATH = "/data"
 STARTUP_DELAY = int(os.getenv("STARTUP_DELAY", "0"))
 
+# Global flag to track if scanning logic is running
+SCANNING_ACTIVE = False
+
 # --- DATABASE SETUP ---
 engine = None
 for i in range(15):
@@ -45,7 +48,7 @@ class FileRecord(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# Official OpenCC initialization (s2t.json for Simplified to Traditional)
+# Official OpenCC initialization (Simplified to Traditional)
 converter = opencc.OpenCC('s2t.json')
 app = FastAPI()
 
@@ -56,11 +59,9 @@ def process_nfo(file_path):
 
     db = SessionLocal()
     try:
-        # Calculate current hash
         with open(file_path, "rb") as f:
             current_hash = hashlib.md5(f.read()).hexdigest()
         
-        # Check DB
         record = db.query(FileRecord).filter(FileRecord.path == file_path).first()
         if record and record.hash == current_hash:
             return 
@@ -74,7 +75,6 @@ def process_nfo(file_path):
         with open(file_path, "w", encoding="utf-8", newline='\n') as f:
             f.write(traditional_content)
 
-        # Update record
         with open(file_path, "rb") as f:
             new_hash = hashlib.md5(f.read()).hexdigest()
 
@@ -90,7 +90,7 @@ def process_nfo(file_path):
         db.close()
 
 def run_full_scan():
-    print("🚀 Starting full scan...")
+    print("🚀 Starting full recursive scan...")
     for root, _, files in os.walk(WATCH_PATH):
         for file in files:
             process_nfo(os.path.join(root, file))
@@ -114,10 +114,12 @@ def start_watcher():
 
 # --- STARTUP HANDLER ---
 def boot_sequence():
+    global SCANNING_ACTIVE
     if STARTUP_DELAY > 0:
         print(f"🕒 Startup delay: {STARTUP_DELAY}s. Use this time to IMPORT backup.")
         time.sleep(STARTUP_DELAY)
     
+    SCANNING_ACTIVE = True
     threading.Thread(target=start_watcher, daemon=True).start()
     threading.Thread(target=run_full_scan, daemon=True).start()
 
@@ -127,37 +129,72 @@ threading.Thread(target=boot_sequence, daemon=True).start()
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     db = SessionLocal()
-    records = db.query(FileRecord).order_by(FileRecord.last_processed.desc()).limit(100).all()
+    # Updated to show only the latest 20 rows
+    records = db.query(FileRecord).order_by(FileRecord.last_processed.desc()).limit(20).all()
     total = db.query(FileRecord).count()
     db.close()
     
+    current_status = "Active" if SCANNING_ACTIVE else "Waiting (Delay Mode)"
+    status_color = "#28a745" if SCANNING_ACTIVE else "#ffc107"
+    refresh_tag = '<meta http-equiv="refresh" content="5">' if not SCANNING_ACTIVE else ""
+    
     html = f"""
     <html>
-        <head><title>NFO Pro</title><style>
-            body {{ font-family: sans-serif; padding: 30px; background: #f4f7f9; }}
-            .card {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
-            .nav {{ display: flex; gap: 10px; margin: 20px 0; background: #eee; padding: 15px; border-radius: 8px; }}
-            table {{ width: 100%; border-collapse: collapse; }}
-            th, td {{ padding: 12px; border-bottom: 1px solid #ddd; text-align: left; font-size: 13px; }}
-            th {{ background: #007bff; color: white; }}
-            .btn {{ padding: 10px 15px; border-radius: 5px; border: none; cursor: pointer; color: white; text-decoration: none; }}
-            .btn-scan {{ background: #28a745; }} .btn-export {{ background: #17a2b8; }} .btn-import {{ background: #6c757d; }}
-        </style></head>
+        <head>
+            {refresh_tag}
+            <title>NFO Pro Translator</title>
+            <style>
+                body {{ font-family: -apple-system, sans-serif; padding: 30px; background: #f4f7f9; color: #333; }}
+                .card {{ max-width: 1000px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }}
+                .status-badge {{ 
+                    padding: 4px 12px; border-radius: 20px; font-size: 0.85em; 
+                    background: {status_color}; color: white; font-weight: bold;
+                }}
+                .nav {{ 
+                    display: flex; gap: 15px; margin: 25px 0; background: #f8f9fa; 
+                    padding: 15px; border-radius: 8px; align-items: center; 
+                }}
+                .btn {{ 
+                    height: 38px; display: inline-flex; align-items: center; justify-content: center;
+                    padding: 0 18px; border-radius: 6px; border: none; cursor: pointer; 
+                    color: white; text-decoration: none; font-weight: 500; font-size: 13px; 
+                }}
+                .btn-scan {{ background: #28a745; }} 
+                .btn-export {{ background: #17a2b8; }} 
+                .btn-import {{ background: #6c757d; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
+                th, td {{ padding: 12px; border-bottom: 1px solid #eee; text-align: left; font-size: 13px; }}
+                th {{ background: #f1f3f5; color: #495057; text-transform: uppercase; font-size: 11px; }}
+                .file-path {{ color: #007bff; word-break: break-all; }}
+            </style>
+        </head>
         <body>
             <div class="card">
-                <h1>NFO Translator Dashboard</h1>
-                <p>Status: <strong>{"Waiting (Delay Mode)" if STARTUP_DELAY > 0 else "Active"}</strong> | Total Files: <strong>{total}</strong></p>
-                <div class="nav">
-                    <form action="/rescan" method="post"><button class="btn btn-scan">🔄 Force Rescan</button></form>
-                    <a href="/export" class="btn btn-export">📤 Export Backup</a>
-                    <form action="/import" method="post" enctype="multipart/form-data" style="margin-left:auto;">
-                        <input type="file" name="file" accept=".json" required>
-                        <button type="submit" class="btn btn-import">📥 Import Backup</button>
-                    </form>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h1>NFO Monitor</h1>
+                    <span class="status-badge">{current_status}</span>
                 </div>
+                <p>Showing latest 20 / Total: <strong>{total}</strong></p>
+
+                <div class="nav">
+                    <form action="/rescan" method="post" style="margin:0;"><button class="btn btn-scan" type="submit">🔄 Rescan All</button></form>
+                    <a href="/export" class="btn btn-export">📤 Export Backup</a>
+                    
+                    <div style="margin-left:auto; display:flex; align-items:center; gap:10px; border-left:1px solid #ddd; padding-left:15px;">
+                        <form action="/import" method="post" enctype="multipart/form-data" style="margin:0; display:flex; align-items:center; gap:10px;">
+                            <input type="file" name="file" accept=".json" required style="font-size:12px;">
+                            <button type="submit" class="btn btn-import">📥 Import JSON</button>
+                        </form>
+                    </div>
+                </div>
+
                 <table>
-                    <tr><th>File Path</th><th>Processed Time</th></tr>
-                    {"".join([f"<tr><td>{r.path}</td><td>{r.last_processed}</td></tr>" for r in records])}
+                    <thead>
+                        <tr><th>Path</th><th>Processed (Local Time)</th></tr>
+                    </thead>
+                    <tbody>
+                        {"".join([f"<tr><td class='file-path'>{r.path}</td><td>{r.last_processed.strftime('%Y-%m-%d %H:%M:%S')}</td></tr>" for r in records])}
+                    </tbody>
                 </table>
             </div>
         </body>
@@ -176,8 +213,11 @@ async def export_db():
     records = db.query(FileRecord).all()
     db.close()
     data = [{"path": r.path, "hash": r.hash, "last_processed": r.last_processed.isoformat()} for r in records]
-    return StreamingResponse(io.BytesIO(json.dumps(data).encode()), media_type="application/json", 
-                             headers={"Content-Disposition": "attachment; filename=nfo_backup.json"})
+    return StreamingResponse(
+        io.BytesIO(json.dumps(data, indent=2).encode()), 
+        media_type="application/json", 
+        headers={"Content-Disposition": "attachment; filename=nfo_backup.json"}
+    )
 
 @app.post("/import")
 async def import_db(file: UploadFile = File(...)):
