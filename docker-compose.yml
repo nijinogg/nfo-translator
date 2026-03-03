@@ -1,23 +1,14 @@
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: nfo_monitor
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
   app:
     build: .
+    # Use network_mode: "host" ONLY if your Postgres is running locally on the host OS
+    # network_mode: "host" 
     ports:
-      - "8080:8080" # Access at http://localhost:8080
+      - "8080:8080"
     volumes:
       - /your/nfo/folder:/data
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/nfo_monitor
-    depends_on:
-      - db
-
-volumes:
-  pgdata:
+      # Format: postgresql://USER:PASSWORD@HOST:PORT/DB_NAME
+      # Change 'localhost' to your DB's IP address if it's on another server
+      - DATABASE_URL=postgresql://myuser:mypassword@192.168.1.100:5432/existing_db
+    restart: always

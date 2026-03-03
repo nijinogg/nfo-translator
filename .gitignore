@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Docker / Postgres data (if stored in local folder)
+pgdata/
+
+# OS files
+.DS_Store
+Thumbs.db
