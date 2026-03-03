@@ -86,7 +86,7 @@ def start_watcher():
 threading.Thread(target=start_watcher, daemon=True).start()
 threading.Thread(target=run_full_scan, daemon=True).start()
 
-# --- WEB UI ---
+# --- UPDATED WEB UI ---
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     db = SessionLocal()
@@ -98,23 +98,84 @@ async def dashboard(request: Request):
     <html>
         <head><title>NFO Monitor</title><style>
             body {{ font-family: sans-serif; padding: 20px; background: #f0f2f5; }}
-            table {{ width: 100%; border-collapse: collapse; background: white; margin-top: 20px; }}
-            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; font-size: 14px; }}
+            .card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .actions {{ display: flex; gap: 10px; margin: 20px 0; align-items: center; }}
+            table {{ width: 100%; border-collapse: collapse; background: white; }}
+            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
             th {{ background: #007bff; color: white; }}
-            .btn {{ padding: 10px 20px; background: #28a745; color: white; border: none; cursor: pointer; border-radius: 4px; text-decoration: none; }}
+            .btn {{ padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; text-decoration: none; color: white; font-size: 14px; }}
+            .btn-scan {{ background: #28a745; }}
+            .btn-export {{ background: #17a2b8; }}
+            .btn-import {{ background: #6c757d; }}
         </style></head>
         <body>
-            <h1>NFO Translator Dashboard</h1>
-            <p>Total Translated: <strong>{total}</strong></p>
-            <form action="/rescan" method="post"><button class="btn" type="submit">🔄 Force Subfolder Rescan</button></form>
-            <table>
-                <tr><th>File Path (Subfolders included)</th><th>Processed Time</th></tr>
-                {"".join([f"<tr><td>{r.path}</td><td>{r.last_processed}</td></tr>" for r in records])}
-            </table>
+            <div class="card">
+                <h1>NFO Translator Dashboard</h1>
+                <p>Total Records: <strong>{total}</strong></p>
+                
+                <div class="actions">
+                    <form action="/rescan" method="post"><button class="btn btn-scan" type="submit">🔄 Force Rescan</button></form>
+                    <a href="/export" class="btn btn-export">📤 Export JSON</a>
+                    
+                    <form action="/import" method="post" enctype="multipart/form-data" style="margin-left: 20px; border-left: 1px solid #ccc; padding-left: 20px;">
+                        <input type="file" name="file" accept=".json" required>
+                        <button type="submit" class="btn btn-import">📥 Import JSON</button>
+                    </form>
+                </div>
+
+                <table>
+                    <tr><th>File Path</th><th>Last Processed</th></tr>
+                    {"".join([f"<tr><td>{r.path}</td><td>{r.last_processed}</td></tr>" for r in records])}
+                </table>
+            </div>
         </body>
     </html>
     """
     return html
+
+# --- NEW: EXPORT FUNCTION ---
+@app.get("/export")
+async def export_database():
+    db = SessionLocal()
+    records = db.query(FileRecord).all()
+    db.close()
+    
+    # Convert database rows to a list of dictionaries
+    data = [
+        {"path": r.path, "hash": r.hash, "last_processed": r.last_processed.isoformat()}
+        for r in records
+    ]
+    
+    # Create a JSON file in memory
+    json_str = json.dumps(data, indent=4)
+    return StreamingResponse(
+        io.BytesIO(json_str.encode()),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=nfo_db_export.json"}
+    )
+
+# --- NEW: IMPORT FUNCTION ---
+@app.post("/import")
+async def import_database(file: UploadFile = File(...)):
+    contents = await file.read()
+    data = json.loads(contents)
+    
+    db = SessionLocal()
+    try:
+        for item in data:
+            # Check if record exists, if so update hash, otherwise add new
+            record = db.query(FileRecord).filter(FileRecord.path == item["path"]).first()
+            if record:
+                record.hash = item["hash"]
+            else:
+                db.add(FileRecord(path=item["path"], hash=item["hash"]))
+        db.commit()
+    except Exception as e:
+        print(f"Import error: {e}")
+    finally:
+        db.close()
+        
+    return RedirectResponse(url="/", status_code=303)
 
 @app.post("/rescan")
 async def trigger_rescan(background_tasks: BackgroundTasks):

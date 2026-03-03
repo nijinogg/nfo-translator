@@ -1,6 +1,7 @@
 watchdog
-opencc-python-reimplemented
+python-multipart
 sqlalchemy
 psycopg2-binary
+opencc
 fastapi
 uvicorn
