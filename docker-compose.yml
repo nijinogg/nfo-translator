@@ -1,25 +1,19 @@
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: nfo_monitor
-      POSTGRES_PASSWORD: nfo_monitor
-      POSTGRES_DB: nfo_monitor
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
   app:
     build: .
-    env_file:
-      - .env
+#    env_file:
+#      - .env
     ports:
       - "8080:8080" # Access at http://localhost:8080
     volumes:
       - /share/Container/strm-data/mdcng-strm:/data
     environment:
+      - PUID=1000
+      - PGID=100
+      - STARTUP_DELAY=360
       - DATABASE_URL=postgresql://nfo_monitor:nfo_monitor@db:5432/nfo_monitor
-    depends_on:
-      - db
+#    depends_on:
+#      - db
 
 volumes:
   pgdata:
