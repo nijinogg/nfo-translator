@@ -31,8 +31,8 @@ The request must include your API key in the following format:
 {
   "key": "your_api_key_here"
 }
----
 
+---
 ## 🚀 Quick Start (Docker Compose)
 
 ```yaml
