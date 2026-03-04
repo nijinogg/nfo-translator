@@ -33,7 +33,7 @@ The request must include your API key in the following format:
 }
 
 ---
-## 🚀 Quick Start (Docker Compose)
+### 🚀 Quick Start (Docker Compose)
 
 ```yaml
 version: '3.8'
