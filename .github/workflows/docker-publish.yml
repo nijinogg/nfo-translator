@@ -12,18 +12,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- DIAGNOSTIC STEP ---
-      # This will list all files in the runner so you can see the exact name/path
-      - name: Check file existence
-        run: |
-          echo "Listing files in root:"
-          ls -F
-          echo "Checking for README specifically:"
-          find . -maxdepth 1 -iname "readme.md"
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -40,7 +31,7 @@ jobs:
           images: ${{ secrets.DOCKER_USERNAME }}/nfo-translator
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=true
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -50,18 +41,15 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      # --- SYNC STEP ---
       - name: Update Docker Hub Description
         uses: peter-evans/dockerhub-description@v4
+        continue-on-error: true 
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
           repository: ${{ secrets.DOCKER_USERNAME }}/nfo-translator
-          # Using the exact standard name
-          readme-filepath: README.md 
+          readme-filepath: README.md
 
   create-release:
     needs: build-and-push
@@ -81,4 +69,4 @@ jobs:
             ## 🐳 Docker Image Info
             `docker pull ${{ secrets.DOCKER_USERNAME }}/nfo-translator:${{ github.ref_name }}`
             
-            Supports: `linux/amd64`, `linux/arm64`
+            **Arch Support:** `linux/amd64`, `linux/arm64`
