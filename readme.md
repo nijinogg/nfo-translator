@@ -1,19 +1,16 @@
-# 🎬 NFO Pro Translator v1.2.0
+# 🎬 NFO Pro Translator
 
-A high-performance, multi-architecture (AMD64/ARM64) Docker utility designed for QNAP and other NAS devices. It automatically monitors and translates NFO metadata between Simplified and Traditional Chinese while preserving XML structure.
+A high-performance, multi-architecture (AMD64/ARM64) Docker utility designed for NAS devices. It automatically monitors and translates NFO metadata between Simplified and Traditional Chinese while preserving XML structure.
 
 ## ✨ Features
 * **Targeted Translation:** Only translates `<title>`, `<plot>`, `<outline>`, `<tag>`, `<genre>`, and `<series>` tags.
-* **Dual Mode:** Supports both `s2t` (Simplified to Traditional) and `t2s` (Traditional to Simplified).
-* **No-JS Dashboard:** A lightweight Web UI with auto-refresh to monitor progress without complex scripts.
-* **Database-Backed:** Uses PostgreSQL to track file hashes, ensuring files are only processed once.
-* **Smart Watcher:** Uses `watchdog` to detect new or modified files in real-time.
+* **Dual Mode:** Supports both `s2t` (Simplified to Traditional) and `t2s` (Traditional to Simplified) via environment variables.
+* **Lightweight Dashboard:** A No-JS Web UI to monitor processing progress in real-time.
+* **Persistent History:** Uses PostgreSQL to track file hashes so files are never processed twice.
 
 ---
 
 ## 🚀 Quick Start (Docker Compose)
-
-Copy this into your `nfo-translator.yml` and run `docker compose up -d`.
 
 ```yaml
 version: '3.8'
@@ -36,8 +33,8 @@ services:
     container_name: nfo-translator
     environment:
       - DATABASE_URL=postgresql://nfo:nfo_pass@nfo-postgres:5432/nfo_db
-      - STARTUP_DELAY=60      # Wait 60s for DB to warm up
-      - TRANS_MODE=s2t        # Use 's2t' or 't2s'
+      - STARTUP_DELAY=60      
+      - TRANS_MODE=s2t        
     volumes:
       - /share/CACHEDEV1_DATA/Multimedia:/data
     ports:
