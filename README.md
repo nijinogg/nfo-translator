@@ -31,7 +31,7 @@ The request must include your API key in the following format:
 {
   "key": "your_api_key_here"
 }
-
+```
 ---
 ### 🚀 Quick Start (Docker Compose)
 
@@ -52,7 +52,7 @@ services:
       - TRANS_MODE=s2t
       - DATABASE_URL=postgresql://<POSTGRES_USER>:<POSTGRES_PASS>@db:5432/<POSTGRES_DB>
 	  
----
+```
 ## 🗄️ Database Management
 
 ### Manual Database Creation
