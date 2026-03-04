@@ -16,34 +16,15 @@ A high-performance, multi-architecture (AMD64/ARM64) Docker utility designed for
 version: '3.8'
 
 services:
-  nfo-postgres:
-    image: postgres:15-alpine
-    container_name: nfo-postgres
-    environment:
-      - POSTGRES_USER=nfo
-      - POSTGRES_PASSWORD=nfo_pass
-      - POSTGRES_DB=nfo_db
-    volumes:
-      - ./db_data:/var/lib/postgresql/data
-    networks:
-      - nfo-network
-
-  nfo-translator:
+  app:
     image: starducktea/nfo-translator:latest
-    container_name: nfo-translator
-    environment:
-      - DATABASE_URL=postgresql://nfo:nfo_pass@nfo-postgres:5432/nfo_db
-      - STARTUP_DELAY=60      
-      - TRANS_MODE=s2t        
-    volumes:
-      - /share/CACHEDEV1_DATA/Multimedia:/data
     ports:
       - "8080:8080"
-    depends_on:
-      - nfo-postgres
-    networks:
-      - nfo-network
-
-networks:
-  nfo-network:
-    driver: bridge
+    volumes:
+      - ./data:/data
+    environment:
+      - PUID=1000
+      - PGID=100
+      - API_KEY=<YOUR_API_KEY>
+      - TRANS_MODE=s2t
+      - DATABASE_URL=postgresql://<POSTGRES_USER>:<POSTGRES_PASS>@db:5432/<POSTGRES_DB>

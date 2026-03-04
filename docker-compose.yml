@@ -2,11 +2,12 @@ services:
   app:
     image: starducktea/nfo-translator:latest
     ports:
-      - "8099:8080"
+      - "8080:8080"
     volumes:
       - ./data:/data
     environment:
       - PUID=1000
       - PGID=100
-      - STARTUP_DELAY=360
-      - DATABASE_URL=postgresql://nfo_monitor:nfo_monitor@db:5432/nfo_monitor
+      - API_KEY=<YOUR_API_KEY>
+      - TRANS_MODE=s2t
+      - DATABASE_URL=postgresql://<POSTGRES_USER>:<POSTGRES_PASS>@db:5432/<POSTGRES_DB>
