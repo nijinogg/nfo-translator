@@ -5,6 +5,7 @@ on:
     # Only trigger on version tags to prevent duplicate 'main' and 'tag' builds
     tags: 
       - 'v*.*.*'
+  workflow_dispatch: # Allows you to click "Run" in the web UI
 
 jobs:
   build-and-push:

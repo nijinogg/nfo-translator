@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 WATCH_PATH = "/data"
-VERSION = "1.2.8"
+VERSION = "1.3.0"
 
 TRANS_MODE = os.getenv("TRANS_MODE", "s2t").lower()
 CONFIG_FILE = "s2t.json" if TRANS_MODE == "s2t" else "t2s.json"
