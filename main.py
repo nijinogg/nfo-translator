@@ -4,6 +4,7 @@ import hashlib
 import threading
 import json
 import io
+import datetime
 import opencc
 import xml.etree.ElementTree as ET
 from fastapi import FastAPI, Request, BackgroundTasks, UploadFile, File
@@ -17,7 +18,11 @@ from sqlalchemy.orm import sessionmaker
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 WATCH_PATH = "/data"
-VERSION = "1.1.0"
+VERSION = "1.2.3"
+
+TRANS_MODE = os.getenv("TRANS_MODE", "s2t").lower()
+CONFIG_FILE = "s2t.json" if TRANS_MODE == "s2t" else "t2s.json"
+MODE_DESC = "Simplified → Traditional" if TRANS_MODE == "s2t" else "Traditional → Simplified"
 
 try:
     STARTUP_DELAY = int(os.getenv("STARTUP_DELAY", "0"))
@@ -31,49 +36,44 @@ APP_BOOT_TIME = time.time()
 engine = None
 for i in range(15):
     try:
-        engine = create_engine(DATABASE_URL)
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
         engine.connect()
         break
     except Exception:
         time.sleep(5)
 
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 class FileRecord(Base):
     __tablename__ = "file_records"
     path = Column(String, primary_key=True)
     hash = Column(String)
-    last_processed = Column(DateTime, default=func.now(), onupdate=func.now())
+    last_processed = Column(DateTime, default=func.now())
 
 Base.metadata.create_all(bind=engine)
-converter = opencc.OpenCC('s2t.json')
+converter = opencc.OpenCC(CONFIG_FILE)
 app = FastAPI()
 
-# --- TARGETED TRANSLATION LOGIC ---
+# --- TRANSLATION LOGIC ---
 TARGET_TAGS = ['outline', 'title', 'plot', 'tag', 'genre', 'series']
 
 def process_nfo(file_path):
     if not file_path.lower().endswith(".nfo"):
         return
-
     db = SessionLocal()
     try:
-        # 1. Check Hash to avoid re-processing
         with open(file_path, "rb") as f:
             curr_hash = hashlib.md5(f.read()).hexdigest()
-        
         rec = db.query(FileRecord).filter(FileRecord.path == file_path).first()
         if rec and rec.hash == curr_hash:
             return 
 
-        # 2. Parse XML
         parser = ET.XMLParser(encoding="utf-8")
         tree = ET.parse(file_path, parser=parser)
         root = tree.getroot()
 
         modified = False
-        # 3. Translate only specific tags
         for tag_name in TARGET_TAGS:
             for element in root.findall(f".//{tag_name}"):
                 if element.text:
@@ -83,30 +83,29 @@ def process_nfo(file_path):
                         modified = True
 
         if modified:
-            # Save back to file
             tree.write(file_path, encoding="utf-8", xml_declaration=True)
-            print(f"✅ Translated tags in: {file_path}")
-
-        # 4. Update Database
-        with open(file_path, "rb") as f:
-            new_h = hashlib.md5(f.read()).hexdigest()
-        
-        if rec: rec.hash = new_h
-        else: db.add(FileRecord(path=file_path, hash=new_h))
-        db.commit()
-
+            with open(file_path, "rb") as f:
+                new_h = hashlib.md5(f.read()).hexdigest()
+            if rec:
+                rec.hash = new_h
+                rec.last_processed = datetime.datetime.now()
+            else:
+                db.add(FileRecord(path=file_path, hash=new_h, last_processed=datetime.datetime.now()))
+            db.commit()
+        elif not rec:
+            db.add(FileRecord(path=file_path, hash=curr_hash, last_processed=datetime.datetime.now()))
+            db.commit()
     except Exception as e:
-        print(f"❌ XML Error in {file_path}: {e}")
+        db.rollback()
     finally:
         db.close()
 
-# --- SCANNING & WATCHER ---
+# --- WATCHER ---
 def run_full_scan():
     for root, _, files in os.walk(WATCH_PATH):
-        for file in files:
-            process_nfo(os.path.join(root, file))
+        for file in files: process_nfo(os.path.join(root, file))
 
-class SubfolderHandler(FileSystemEventHandler):
+class NFOHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if not event.is_directory: process_nfo(event.src_path)
     def on_created(self, event):
@@ -114,17 +113,14 @@ class SubfolderHandler(FileSystemEventHandler):
 
 def boot_sequence():
     global SCANNING_ACTIVE
-    if STARTUP_DELAY > 0:
-        time.sleep(STARTUP_DELAY)
+    if STARTUP_DELAY > 0: time.sleep(STARTUP_DELAY)
     SCANNING_ACTIVE = True
-    obs = Observer()
-    obs.schedule(SubfolderHandler(), WATCH_PATH, recursive=True)
-    obs.start()
+    obs = Observer(); obs.schedule(NFOHandler(), WATCH_PATH, recursive=True); obs.start()
     run_full_scan()
 
 threading.Thread(target=boot_sequence, daemon=True).start()
 
-# --- WEB UI (NO-JS AUTO REFRESH) ---
+# --- DASHBOARD UI (REVERTED TO v1.2.1 STYLE) ---
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     db = SessionLocal()
@@ -137,7 +133,7 @@ async def dashboard(request: Request):
     is_active = SCANNING_ACTIVE or remaining <= 0
     status_text = "Active" if is_active else f"Waiting ({remaining}s)"
     status_color = "#28a745" if is_active else "#ffc107"
-    refresh = '<meta http-equiv="refresh" content="3">' if not is_active else ""
+    refresh = '<meta http-equiv="refresh" content="5">'
 
     return f"""
     <html>
@@ -161,7 +157,7 @@ async def dashboard(request: Request):
                     <h1>NFO Monitor <small style="font-size:0.4em; color:#999;">v{VERSION}</small></h1>
                     <span class="status-badge">{status_text}</span>
                 </div>
-                <p>Latest 20 / Total: {total} | Targets: <code>{', '.join(TARGET_TAGS)}</code></p>
+                <p>Latest 20 / Total: {total} | <b>Mode: {MODE_DESC}</b></p>
                 <div class="nav">
                     <form action="/rescan" method="post" style="margin:0;"><button class="btn btn-scan">🔄 Rescan</button></form>
                     <a href="/export" class="btn btn-export">📤 Export</a>
@@ -173,9 +169,9 @@ async def dashboard(request: Request):
                     </div>
                 </div>
                 <table>
-                    <thead><tr><th>Path</th><th>Processed</th></tr></thead>
+                    <thead><tr><th>Processed</th><th>Path</th></tr></thead>
                     <tbody>
-                        {"".join([f"<tr><td>{r.path}</td><td>{r.last_processed.strftime('%H:%M:%S')}</td></tr>" for r in records])}
+                        {"".join([f"<tr><td>{r.last_processed.strftime('%H:%M:%S')}</td><td>{r.path}</td></tr>" for r in records])}
                     </tbody>
                 </table>
             </div>
@@ -183,21 +179,28 @@ async def dashboard(request: Request):
     </html>
     """
 
-# (Export/Import/Rescan routes remain the same as previous version)
 @app.get("/export")
 async def export_db():
-    db = SessionLocal(); recs = db.query(FileRecord).all(); db.close()
-    data = [{"path": r.path, "hash": r.hash, "last_processed": r.last_processed.isoformat()} for r in recs]
-    return StreamingResponse(io.BytesIO(json.dumps(data).encode()), media_type="application/json", headers={"Content-Disposition": "attachment; filename=backup.json"})
+    db = SessionLocal()
+    try:
+        recs = db.query(FileRecord).all()
+        data = [{"path": r.path, "hash": r.hash, "last_processed": r.last_processed.isoformat()} for r in recs]
+        # Keep the JSON fix from v1.2.2 (indented and UTF-8)
+        json_str = json.dumps(data, indent=4, ensure_ascii=False)
+        return StreamingResponse(io.BytesIO(json_str.encode("utf-8")), media_type="application/json", headers={"Content-Disposition": "attachment; filename=backup.json"})
+    finally:
+        db.close()
 
 @app.post("/import")
 async def import_db(file: UploadFile = File(...)):
     contents = await file.read(); data = json.loads(contents); db = SessionLocal()
-    for item in data:
-        rec = db.query(FileRecord).filter(FileRecord.path == item["path"]).first()
-        if rec: rec.hash = item["hash"]
-        else: db.add(FileRecord(path=item["path"], hash=item["hash"]))
-    db.commit(); db.close()
+    try:
+        for item in data:
+            rec = db.query(FileRecord).filter(FileRecord.path == item["path"]).first()
+            if rec: rec.hash = item["hash"]
+            else: db.add(FileRecord(path=item["path"], hash=item["hash"], last_processed=datetime.datetime.fromisoformat(item["last_processed"])))
+        db.commit()
+    finally: db.close()
     return RedirectResponse(url="/", status_code=303)
 
 @app.post("/rescan")
