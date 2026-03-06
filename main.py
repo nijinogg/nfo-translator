@@ -156,7 +156,7 @@ async def dashboard():
     <html>
         <head>
             {refresh_tag}
-            <title>NFO Pro v{VERSION}</title>
+            <title>NFO Monitor v{VERSION}</title>
             <style>
                 body {{ font-family: sans-serif; padding: 20px; background: #f4f7f9; text-align: center; }}
                 .card {{ max-width: 480px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: left; }}
