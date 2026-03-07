@@ -5,6 +5,7 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/data
+      - ./reserved.txt:/app/reserved.txt
     environment:
       - PUID=1000
       - PGID=100

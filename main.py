@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 # --- CONFIGURATION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 WATCH_PATH = "/data"
-VERSION = "1.5.5"
+VERSION = "1.5.8"
 # Secure API key from environment variable
 API_KEY = os.getenv("API_KEY", "DEFAULT_SECURE_KEY")
 
